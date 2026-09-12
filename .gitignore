@@ -75,3 +75,6 @@ debug.xml
 /affected_sketches.txt
 /affected_examples.txt
 /ctags_*
+
+# Arduino IDE and arduino-cli build output inside example folders
+libraries/*/examples/*/build/

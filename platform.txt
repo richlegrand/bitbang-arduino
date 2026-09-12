@@ -1,4 +1,4 @@
-name=ESP32 Arduino
+name=BitBang ESP32
 version=3.3.11
 
 tools.esp32-arduino-libs.path={runtime.platform.path}/tools/esp32-arduino-libs
