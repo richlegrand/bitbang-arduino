@@ -41,13 +41,14 @@ public:
    * connects to it, and a server that is not yet listening produces a
    * connection refused rather than a retry.
    *
-   * port is where the sketch's server listens. Returns false if identity,
-   * signaling or the transport failed to start; the reason goes to the log. */
-  bool begin(uint16_t port = 80);
+   * Blocks until the signaling server has registered the device, so that
+   * url() is usable on the line after this returns. Returns false if identity,
+   * signaling or the transport failed to start, or if registration did not
+   * complete within timeout_ms; the reason goes to the log. */
+  bool begin(uint16_t port = 80, uint32_t timeout_ms = 15000);
 
-  /* The link to hand someone. Empty until begin() has reached the signaling
-   * server, which needs a network round trip, so print it after begin()
-   * returns true rather than before. */
+  /* The link to hand someone. Valid once begin() has returned true, which is
+   * what that call waits for. Empty if signaling has since dropped. */
   String url();
 
   /* The code that authorizes a first viewer, shown once at setup. Empty when
