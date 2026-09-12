@@ -78,3 +78,4 @@ debug.xml
 
 # Arduino IDE and arduino-cli build output inside example folders
 libraries/*/examples/*/build/
+libraries/*/examples/*/arduino_secrets.h

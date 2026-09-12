@@ -24,8 +24,21 @@
 // ===========================
 // Enter your WiFi credentials
 // ===========================
-const char *ssid = "**********";
-const char *password = "**********";
+// Either edit the two lines below, or put them in arduino_secrets.h next to
+// this sketch, which is not tracked and will not be committed:
+//
+//     #define SECRET_SSID "your network"
+//     #define SECRET_PASS "your password"
+#if __has_include("arduino_secrets.h")
+#include "arduino_secrets.h"
+#endif
+#ifndef SECRET_SSID
+#define SECRET_SSID "**********"
+#define SECRET_PASS "**********"
+#endif
+
+const char *ssid = SECRET_SSID;
+const char *password = SECRET_PASS;
 
 extern "C" {
 #include "camera_server.h"
