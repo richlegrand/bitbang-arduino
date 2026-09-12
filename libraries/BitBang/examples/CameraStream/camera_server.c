@@ -16,6 +16,16 @@
  * /status    every sensor field, as JSON
  */
 
+/* This file never includes Arduino.h, so nothing derives LOG_LOCAL_LEVEL from
+ * the Tools > Core Debug Level menu for it, and it falls back to the level the
+ * libraries were built at -- error. The menu only defines CORE_DEBUG_LEVEL;
+ * turning that into something esp_log.h reads is left to each file. Without
+ * this, raising the menu in the IDE silences this file anyway, which reads as
+ * the setting not working. Must precede esp_log.h. */
+#if defined(CORE_DEBUG_LEVEL) && !defined(LOG_LOCAL_LEVEL)
+#define LOG_LOCAL_LEVEL CORE_DEBUG_LEVEL
+#endif
+
 #include <string.h>
 #include <errno.h>
 #include "freertos/FreeRTOS.h"
@@ -351,6 +361,7 @@ static const char INDEX_HTML[] =
     "</style>"
     "<div id=side></div>"
     "<div id=main><canvas id=v width=640 height=480></canvas>"
+    "<img id=m style=display:none>"
     "<div id=s>waiting for frames</div></div>"
     "<script>"
     /* var|kind|args -- kind r=range, c=checkbox, s=select. Grouped the way the
@@ -359,7 +370,9 @@ static const char INDEX_HTML[] =
        they are sensor-bringup tools, and a bad register write wedges the
        sensor. */
     "const G=[['Resolution',["
-    "['framesize','s','5:QVGA,6:CIF,7:HVGA,8:VGA,9:SVGA,10:XGA,11:HD,12:SXGA,13:UXGA'],"
+    /* No options here: /status sends them, built from the driver's own enum.
+       See FRAMESIZES below for why a list of numbers in this page is wrong. */
+    "['framesize','s',''],"
     /* Reversed on purpose. jpeg_quality is 4..63 with *lower* meaning better,
        so a plain slider labelled Quality gets worse as you drag it right --
        true of the stock ESP32-CAM page too. The wire value is unchanged, so
@@ -412,6 +425,10 @@ static const char INDEX_HTML[] =
        page: the sensor may already have been configured, and a slider showing
        a value the sensor does not hold is worse than no slider. */
     "fetch('/status').then(r=>r.json()).then(j=>{"
+    "if(j.framesizes&&el.framesize){"
+    "for(const o of j.framesizes.split(',')){const [val,txt]=o.split(':');"
+    "const op=document.createElement('option');op.value=val;op.textContent=txt;"
+    "el.framesize.appendChild(op)}}"
     "for(const k in el){if(!(k in j))continue;const i=el[k];"
     "if(i.type==='checkbox')i.checked=!!j[k];"
     "else if(i.dataset.rev)i.value=i.dataset.rev-j[k];"
@@ -424,6 +441,19 @@ static const char INDEX_HTML[] =
        them here on a BroadcastChannel; this page owns the canvas. */
     "const c=document.getElementById('v'),x=c.getContext('2d');"
     "let s=document.getElementById('s');"
+    /* Reached through bitbang the page is inside bootstrap's iframe; reached
+       directly on the LAN it is top-level. That is synchronous and needs no
+       timeout. __bitbang would be the obvious flag, but bootstrap assigns it
+       on iframe load, after this script has already run.
+       Without a data channel there is no canvas to feed, so fall back to
+       /stream. Multipart does not render in WebKit, which is why the canvas
+       exists at all -- but that only matters for the remote case, which is
+       the one that has the data channel. */
+    "if(window.self===window.top){"
+    "const m=document.getElementById('m');"
+    "c.style.display='none';m.style.display='';m.src='/stream';"
+    "m.onload=()=>{if(s){s.remove();s=null}};"
+    "}else{"
     "new BroadcastChannel('bitbang-video').onmessage=async e=>{"
     "if(e.data.type!=='frame')return;"
     "try{"
@@ -435,6 +465,7 @@ static const char INDEX_HTML[] =
     "if(s){s.remove();s=null}"
     "}catch(err){/* a truncated frame is a dropped frame, not an error */}"
     "};"
+    "}"
     "</script>";
 
 static esp_err_t index_handler(httpd_req_t *req)
@@ -760,6 +791,21 @@ static esp_err_t control_handler(httpd_req_t *req)
     return httpd_resp_send(req, NULL, 0);
 }
 
+/* The page cannot hardcode these numbers.
+ *
+ * framesize_t is an enum whose values shift when Espressif inserts a size:
+ * esp32-camera 2.1.7 added 128X128 and 320X320 near the front, so everything
+ * from QCIF up moved by two and VGA went from 8 to 10. A page carrying the old
+ * numbering labels a VGA stream XGA, and sending what it calls XGA selects
+ * something else again. Naming the constants keeps the two in step whichever
+ * driver is linked -- which differs between the IDF example and the Arduino
+ * package today. */
+static const struct { framesize_t value; const char *name; } FRAMESIZES[] = {
+    { FRAMESIZE_QVGA, "QVGA" }, { FRAMESIZE_CIF,  "CIF"  }, { FRAMESIZE_HVGA, "HVGA" },
+    { FRAMESIZE_VGA,  "VGA"  }, { FRAMESIZE_SVGA, "SVGA" }, { FRAMESIZE_XGA,  "XGA"  },
+    { FRAMESIZE_HD,   "HD"   }, { FRAMESIZE_SXGA, "SXGA" }, { FRAMESIZE_UXGA, "UXGA" },
+};
+
 static esp_err_t status_handler(httpd_req_t *req)
 {
     sensor_t *s = esp_camera_sensor_get();
@@ -767,14 +813,25 @@ static esp_err_t status_handler(httpd_req_t *req)
         return httpd_resp_send_500(req);
     }
 
-    char json[512];
+    char sizes[160];
+    int sn = 0;
+    for (size_t i = 0; i < sizeof(FRAMESIZES) / sizeof(FRAMESIZES[0]); i++) {
+        int w = snprintf(sizes + sn, sizeof(sizes) - sn, "%s%u:%s",
+                         sn ? "," : "", (unsigned) FRAMESIZES[i].value, FRAMESIZES[i].name);
+        if (w < 0 || (size_t) w >= sizeof(sizes) - sn) {
+            break;
+        }
+        sn += w;
+    }
+
+    char json[640];
     int n = snprintf(json, sizeof(json),
         "{\"framesize\":%u,\"quality\":%u,\"brightness\":%d,\"contrast\":%d,"
         "\"saturation\":%d,\"special_effect\":%u,\"wb_mode\":%u,\"awb\":%u,"
         "\"awb_gain\":%u,\"aec\":%u,\"aec2\":%u,\"ae_level\":%d,\"aec_value\":%u,"
         "\"agc\":%u,\"agc_gain\":%u,\"gainceiling\":%u,\"bpc\":%u,\"wpc\":%u,"
         "\"raw_gma\":%u,\"lenc\":%u,\"hmirror\":%u,\"vflip\":%u,\"dcw\":%u,"
-        "\"colorbar\":%u,\"pixformat\":%u,\"xclk\":%u}",
+        "\"colorbar\":%u,\"pixformat\":%u,\"xclk\":%u,\"framesizes\":\"%s\"}",
         s->status.framesize, s->status.quality, s->status.brightness,
         s->status.contrast, s->status.saturation, s->status.special_effect,
         s->status.wb_mode, s->status.awb, s->status.awb_gain, s->status.aec,
@@ -782,7 +839,7 @@ static esp_err_t status_handler(httpd_req_t *req)
         s->status.agc_gain, s->status.gainceiling, s->status.bpc, s->status.wpc,
         s->status.raw_gma, s->status.lenc, s->status.hmirror, s->status.vflip,
         s->status.dcw, s->status.colorbar, s->pixformat,
-        (unsigned) (s->xclk_freq_hz / 1000000));
+        (unsigned) (s->xclk_freq_hz / 1000000), sizes);
     if (n < 0 || n >= (int) sizeof(json)) {
         return httpd_resp_send_500(req);
     }

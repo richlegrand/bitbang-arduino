@@ -71,6 +71,10 @@ void setup() {
     if (code.length()) {
       Serial.println("Pairing code: " + code);
     }
+  } else {
+    // Local only. The page above still works on this network; what failed is
+    // the part that makes it reachable off it.
+    Serial.println("BitBang did not come up -- see the log above.");
   }
 }
 
